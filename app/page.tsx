@@ -210,24 +210,40 @@ export default function Home() {
           </p>
         )}
         <p style={{ fontSize: 13, color: "#8a8a8a", maxWidth: 420, textAlign: "center" }}>
-          This usually means the configured Drive folder doesn&apos;t exist or isn&apos;t
-          accessible to the Google account you signed in with. Check{" "}
-          <code>DRIVE_FOLDER_ID</code> in your deployment&apos;s environment variables.
+          This usually means either the configured Drive folder doesn&apos;t exist /
+          isn&apos;t accessible to the signed-in Google account, or your stored
+          Google authorization predates a change to the app&apos;s required Drive
+          permissions and needs to be renewed.
         </p>
-        <button
-          onClick={() => window.location.reload()}
-          style={{
-            fontSize: 14,
-            color: "#1a1a1a",
-            background: "transparent",
-            border: "1px solid #d8d8d8",
-            borderRadius: 6,
-            padding: "8px 16px",
-            cursor: "pointer",
-          }}
-        >
-          Retry
-        </button>
+        <div style={{ display: "flex", gap: 12 }}>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              fontSize: 14,
+              color: "#1a1a1a",
+              background: "transparent",
+              border: "1px solid #d8d8d8",
+              borderRadius: 6,
+              padding: "8px 16px",
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+          <a
+            href="/api/auth"
+            style={{
+              fontSize: 14,
+              color: "#1a1a1a",
+              textDecoration: "none",
+              border: "1px solid #d8d8d8",
+              borderRadius: 6,
+              padding: "8px 16px",
+            }}
+          >
+            Reconnect Google Drive
+          </a>
+        </div>
       </div>
     );
   }
