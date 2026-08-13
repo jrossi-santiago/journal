@@ -38,7 +38,7 @@ export default function Home() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [docId, setDocId] = useState<string | null>(null);
-  const [savedFlash, setSavedFlash] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const [newDocFlash, setNewDocFlash] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
 
@@ -104,13 +104,18 @@ export default function Home() {
           body: currentBody,
         }),
       })
-        .then((res) => {
-          if (!res.ok) throw new Error("save failed");
-          setSavedFlash(true);
+        .then(async (res) => {
+          if (!res.ok) {
+            const detail = await res.text().catch(() => "");
+            throw new Error(`save failed: ${res.status} ${detail}`);
+          }
+          setSaveStatus("saved");
           if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
-          savedFlashTimer.current = setTimeout(() => setSavedFlash(false), 1600);
+          savedFlashTimer.current = setTimeout(() => setSaveStatus("idle"), 1600);
         })
-        .catch(() => {
+        .catch((err) => {
+          console.error("[minimal-writer] autosave failed", err);
+          setSaveStatus("error");
           // Keep the local buffer as the safety net and try again shortly.
           retryTimer.current = setTimeout(
             () => performSaveRef.current(targetDocId, currentTitle, currentBody),
@@ -161,7 +166,8 @@ export default function Home() {
       setNewDocFlash(true);
       if (newDocFlashTimer.current) clearTimeout(newDocFlashTimer.current);
       newDocFlashTimer.current = setTimeout(() => setNewDocFlash(false), 2200);
-    } catch {
+    } catch (err) {
+      console.error("[minimal-writer] failed to create new doc", err);
       // Leave the user on the current doc; they can try the button again.
     }
   }, [title, body]);
@@ -253,7 +259,7 @@ export default function Home() {
               padding: 6,
               borderRadius: 999,
               color: "#9a9a9a",
-              opacity: 0,
+              opacity: 0.4,
               transition: "opacity 150ms ease, color 150ms ease, background 150ms ease",
             }}
           >
@@ -293,13 +299,13 @@ export default function Home() {
           bottom: 20,
           right: 24,
           fontSize: 12,
-          color: "#b3b3b3",
-          opacity: savedFlash ? 1 : 0,
+          color: saveStatus === "error" ? "#b33" : "#b3b3b3",
+          opacity: saveStatus === "idle" ? 0 : 1,
           transition: "opacity 500ms ease",
           pointerEvents: "none",
         }}
       >
-        Saved
+        {saveStatus === "error" ? "Couldn't save — retrying…" : "Saved"}
       </div>
 
       <div
