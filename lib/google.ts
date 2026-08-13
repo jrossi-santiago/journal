@@ -1,7 +1,10 @@
 import { google } from "googleapis";
 import { getRefreshToken } from "./kv";
 
-const SCOPES = ["https://www.googleapis.com/auth/drive.file"];
+// Full Drive access is required (not drive.file) because the target folder
+// is created by the user in the Drive UI, not by this app — drive.file only
+// grants access to files/folders the app itself created or opened.
+const SCOPES = ["https://www.googleapis.com/auth/drive"];
 
 const DOC_MIME_TYPE = "application/vnd.google-apps.document";
 
