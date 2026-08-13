@@ -32,16 +32,22 @@ export async function GET() {
     let title = "";
     let body = "";
 
-    if (!docId) {
-      docId = await createDoc(auth, folderId, todayTitle());
-      await setMasterDocId(docId);
-    } else {
+    if (docId) {
       try {
         const text = await readDocText(auth, docId);
         ({ title, body } = parseContent(text));
       } catch (err) {
-        console.error("Failed to read master doc, it may have been deleted", err);
+        console.error(
+          "Failed to read master doc, it may have been deleted; creating a new one",
+          err
+        );
+        docId = null;
       }
+    }
+
+    if (!docId) {
+      docId = await createDoc(auth, folderId, todayTitle());
+      await setMasterDocId(docId);
     }
 
     return NextResponse.json({ authenticated: true, docId, title, body });
