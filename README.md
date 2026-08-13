@@ -1,10 +1,10 @@
 # minimal-writer
 
-A single-page, blank-white-screen writing app. Everything you type is
-continuously backed up to one Google Doc in a Drive folder you choose. A
-small checkmark next to the title lets you branch into a fresh Doc for the
-current browser session only; the next page load goes back to the master
-doc.
+A blank-white-screen writing app backed by Google Drive. Signing in lands
+you on a minimal dashboard listing every document in the Drive folder you
+chose, most recently edited first — click one to keep writing in it, or hit
+"New" for a blank page. Each new document becomes its own Google Doc;
+reopening an old one amends that same Doc rather than making another copy.
 
 ## 1. Set up Google Cloud (you do this part)
 
@@ -56,8 +56,8 @@ npm run dev
 ```
 
 Open `http://localhost:3000`, click "Connect Google Drive", and authorize
-with the Google account you added as a test user. After that it creates (or
-reuses) the master doc and you can start typing.
+with the Google account you added as a test user. After that you land on
+the dashboard; click "New" to start writing.
 
 ## 5. Deploy
 
@@ -72,14 +72,22 @@ accordingly.
 
 - All Google OAuth and Drive calls happen server-side in API routes
   (`app/api/**`) — the browser never sees Google credentials.
+- `/` is the dashboard. `GET /api/docs` lists the Docs in the configured
+  folder (`files.list`, newest edit first) and each row links to
+  `/write?doc=<fileId>`.
+- `/write` is the editor. With a `?doc=` id it loads that file and every
+  save amends it. Without one it starts a blank document; the Drive file is
+  created on the first save that has any content (so an abandoned blank page
+  leaves nothing behind), and the returned file id is then written into the
+  URL so reloads and later saves stay on that same file.
 - The Doc's plain-text content is `title\n\nbody`; the Drive API's
   `files.export` / `files.update` read and overwrite it wholesale on each
-  sync (no Docs API index-based diffing).
-- Typing debounces an autosave (~2.5s of inactivity) to the currently active
-  doc, and mirrors content into `localStorage` on every change as an
-  offline buffer. A failed save retries automatically.
-- The checkmark button creates a new Doc in the same folder (titled from
-  the current title field, or today's date if it's empty) and makes it the
-  active doc for the rest of the browser session — it does not touch the
-  stored `masterDocId`, so a fresh page load always goes back to the master
-  doc.
+  sync (no Docs API index-based diffing). The same update call renames the
+  Drive file to match the title, which is what the dashboard lists.
+- Typing debounces an autosave (~2.5s of inactivity) and mirrors content
+  into `localStorage` (keyed per document) as an offline buffer. A failed
+  save retries automatically, saves are serialized so a new document can
+  never be created twice, and leaving the page flushes any pending edit.
+- Drive is the only source of truth for documents — the KV store now holds
+  just the Google refresh token. (The old `minimal-writer:masterDocId` key
+  is unused; that Doc still shows up in the dashboard like any other.)

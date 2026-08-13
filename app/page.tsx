@@ -1,55 +1,49 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
-const LOCAL_STORAGE_KEY = "minimal-writer:buffer";
-const AUTOSAVE_DEBOUNCE_MS = 2500;
-const LOCAL_MIRROR_DEBOUNCE_MS = 300;
-const RETRY_DELAY_MS = 5000;
+import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Status = "loading" | "unauthenticated" | "ready" | "error";
 
-interface LocalBuffer {
-  docId: string;
-  title: string;
-  body: string;
+interface DocSummary {
+  id: string;
+  name: string;
+  modifiedTime: string | null;
 }
 
-function loadLocalBuffer(): LocalBuffer | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LocalBuffer) : null;
-  } catch {
-    return null;
+/** Short, quiet timestamps: "2:14 PM", "Yesterday", "Mar 4", "Mar 4, 2024". */
+function formatModified(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDiff = Math.floor((startOfToday.getTime() - date.getTime()) / 86_400_000);
+
+  if (date >= startOfToday) {
+    return date.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
   }
-}
-
-function saveLocalBuffer(buffer: LocalBuffer) {
-  try {
-    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(buffer));
-  } catch {
-    // localStorage unavailable (private browsing, quota, etc.) — not fatal.
+  if (dayDiff < 1) return "Yesterday";
+  if (dayDiff < 6) {
+    return date.toLocaleDateString(undefined, { weekday: "long" });
   }
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
-export default function Home() {
+export default function Dashboard() {
   const [status, setStatus] = useState<Status>("loading");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [docId, setDocId] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
-  const [newDocFlash, setNewDocFlash] = useState(false);
+  const [docs, setDocs] = useState<DocSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
-  const [docError, setDocError] = useState<string | null>(null);
 
-  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const localMirrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savedFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const newDocFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Load initial state on mount.
   useEffect(() => {
     (async () => {
       const params = new URLSearchParams(window.location.search);
@@ -60,153 +54,58 @@ export default function Home() {
       }
 
       try {
-        const res = await fetch("/api/doc");
+        const res = await fetch("/api/docs");
         const data = await res.json();
 
         if (!res.ok) {
-          // A non-2xx response means we're authenticated with Google but
-          // something else failed server-side (e.g. DRIVE_FOLDER_ID is
-          // misconfigured or inaccessible) — this is not a login problem,
-          // so don't send the user back to the "Connect Google Drive" screen.
-          setDocError(data.error ?? "unknown_error");
+          // Authenticated with Google but something else failed server-side
+          // (e.g. DRIVE_FOLDER_ID is misconfigured) — not a login problem.
+          setError(data.error ?? "unknown_error");
           setStatus("error");
           return;
         }
-
         if (!data.authenticated) {
           setStatus("unauthenticated");
           return;
         }
 
-        setDocId(data.docId);
-        setTitle(data.title ?? "");
-        setBody(data.body ?? "");
+        setDocs(data.docs ?? []);
         setStatus("ready");
       } catch {
-        // Network failure on initial load — fall back to whatever we last
-        // buffered locally so the user can keep writing offline.
-        const buffer = loadLocalBuffer();
-        if (buffer) {
-          setDocId(buffer.docId);
-          setTitle(buffer.title);
-          setBody(buffer.body);
-        }
-        setStatus("ready");
+        setError("network_error");
+        setStatus("error");
       }
     })();
   }, []);
-
-  type SaveFn = (docId: string, title: string, body: string) => void;
-  const performSaveRef = useRef<SaveFn>(() => {});
-
-  const performSave = useCallback<SaveFn>(
-    (targetDocId, currentTitle, currentBody) => {
-      if (retryTimer.current) {
-        clearTimeout(retryTimer.current);
-        retryTimer.current = null;
-      }
-
-      fetch("/api/doc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          docId: targetDocId,
-          title: currentTitle,
-          body: currentBody,
-        }),
-      })
-        .then(async (res) => {
-          if (!res.ok) {
-            const detail = await res.text().catch(() => "");
-            throw new Error(`save failed: ${res.status} ${detail}`);
-          }
-          setSaveStatus("saved");
-          if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
-          savedFlashTimer.current = setTimeout(() => setSaveStatus("idle"), 1600);
-        })
-        .catch((err) => {
-          console.error("[minimal-writer] autosave failed", err);
-          setSaveStatus("error");
-          // Keep the local buffer as the safety net and try again shortly.
-          retryTimer.current = setTimeout(
-            () => performSaveRef.current(targetDocId, currentTitle, currentBody),
-            RETRY_DELAY_MS
-          );
-        });
-    },
-    []
-  );
-
-  useEffect(() => {
-    performSaveRef.current = performSave;
-  }, [performSave]);
-
-  // Mirror to localStorage (lightly debounced) and schedule the debounced
-  // autosave to Drive whenever the title or body changes.
-  useEffect(() => {
-    if (status !== "ready" || !docId) return;
-
-    if (localMirrorTimer.current) clearTimeout(localMirrorTimer.current);
-    localMirrorTimer.current = setTimeout(() => {
-      saveLocalBuffer({ docId, title, body });
-    }, LOCAL_MIRROR_DEBOUNCE_MS);
-
-    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(() => {
-      performSave(docId, title, body);
-    }, AUTOSAVE_DEBOUNCE_MS);
-
-    return () => {
-      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-      if (localMirrorTimer.current) clearTimeout(localMirrorTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, body, docId, status]);
-
-  const handleNewDoc = useCallback(async () => {
-    try {
-      const res = await fetch("/api/doc/new", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, body }),
-      });
-      if (!res.ok) throw new Error("failed to create new doc");
-      const data = await res.json();
-      setDocId(data.docId);
-      saveLocalBuffer({ docId: data.docId, title, body });
-      setNewDocFlash(true);
-      if (newDocFlashTimer.current) clearTimeout(newDocFlashTimer.current);
-      newDocFlashTimer.current = setTimeout(() => setNewDocFlash(false), 2200);
-    } catch (err) {
-      console.error("[minimal-writer] failed to create new doc", err);
-      // Leave the user on the current doc; they can try the button again.
-    }
-  }, [title, body]);
 
   if (status === "loading") {
     return <div style={{ minHeight: "100vh", background: "#fff" }} />;
   }
 
+  if (status === "unauthenticated") {
+    return (
+      <Centered>
+        <a href="/api/auth" style={{ ...buttonStyle, fontSize: 16, padding: "10px 20px" }}>
+          Connect Google Drive
+        </a>
+        {oauthError && (
+          <p style={{ fontSize: 13, color: "#a33", maxWidth: 360, textAlign: "center" }}>
+            Something went wrong connecting to Google ({oauthError}). Please try again.
+          </p>
+        )}
+      </Centered>
+    );
+  }
+
   if (status === "error") {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 16,
-          background: "#fff",
-          padding: 24,
-        }}
-      >
+      <Centered>
         <p style={{ fontSize: 15, color: "#1a1a1a", maxWidth: 420, textAlign: "center" }}>
-          Connected to Google, but couldn&apos;t load your document.
+          Connected to Google, but couldn&apos;t list your documents.
         </p>
-        {docError && (
+        {error && (
           <p style={{ fontSize: 13, color: "#a33", maxWidth: 420, textAlign: "center" }}>
-            {docError}
+            {error}
           </p>
         )}
         <p style={{ fontSize: 13, color: "#8a8a8a", maxWidth: 420, textAlign: "center" }}>
@@ -216,71 +115,14 @@ export default function Home() {
           permissions and needs to be renewed.
         </p>
         <div style={{ display: "flex", gap: 12 }}>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              fontSize: 14,
-              color: "#1a1a1a",
-              background: "transparent",
-              border: "1px solid #d8d8d8",
-              borderRadius: 6,
-              padding: "8px 16px",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={() => window.location.reload()} style={buttonStyle}>
             Retry
           </button>
-          <a
-            href="/api/auth"
-            style={{
-              fontSize: 14,
-              color: "#1a1a1a",
-              textDecoration: "none",
-              border: "1px solid #d8d8d8",
-              borderRadius: 6,
-              padding: "8px 16px",
-            }}
-          >
+          <a href="/api/auth" style={buttonStyle}>
             Reconnect Google Drive
           </a>
         </div>
-      </div>
-    );
-  }
-
-  if (status === "unauthenticated") {
-    return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 16,
-          background: "#fff",
-        }}
-      >
-        <a
-          href="/api/auth"
-          style={{
-            fontSize: 16,
-            color: "#1a1a1a",
-            textDecoration: "none",
-            border: "1px solid #d8d8d8",
-            borderRadius: 6,
-            padding: "10px 20px",
-            transition: "border-color 150ms ease",
-          }}
-        >
-          Connect Google Drive
-        </a>
-        {oauthError && (
-          <p style={{ fontSize: 13, color: "#a33", maxWidth: 360, textAlign: "center" }}>
-            Something went wrong connecting to Google ({oauthError}). Please try again.
-          </p>
-        )}
-      </div>
+      </Centered>
     );
   }
 
@@ -296,120 +138,118 @@ export default function Home() {
     >
       <div style={{ width: "100%", maxWidth: 680 }}>
         <div
-          className="title-row"
           style={{
             display: "flex",
-            alignItems: "center",
-            gap: 10,
-            marginBottom: 28,
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            marginBottom: 36,
           }}
         >
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Untitled"
-            style={{
-              flex: 1,
-              border: "none",
-              outline: "none",
-              fontSize: 30,
-              fontWeight: 600,
-              color: "#1a1a1a",
-              background: "transparent",
-              padding: 2,
-            }}
-          />
-          <button
-            onClick={handleNewDoc}
-            title="Start a new document for this session"
-            aria-label="Start a new document for this session"
-            className="new-doc-button"
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              padding: 6,
-              borderRadius: 999,
-              color: "#9a9a9a",
-              opacity: 0.4,
-              transition: "opacity 150ms ease, color 150ms ease, background 150ms ease",
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-              <path
-                d="M4 10.5 8 14.5 16 6"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
+          <h1 style={{ fontSize: 30, fontWeight: 600, color: "#1a1a1a", margin: 0 }}>
+            Documents
+          </h1>
+          <Link href="/write" className="new-link">
+            New
+          </Link>
         </div>
 
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder=""
-          style={{
-            width: "100%",
-            minHeight: "70vh",
-            border: "none",
-            outline: "none",
-            resize: "none",
-            fontSize: 18,
-            lineHeight: 1.8,
-            color: "#1a1a1a",
-            background: "transparent",
-          }}
-        />
-      </div>
-
-      <div
-        style={{
-          position: "fixed",
-          bottom: 20,
-          right: 24,
-          fontSize: 12,
-          color: saveStatus === "error" ? "#b33" : "#b3b3b3",
-          opacity: saveStatus === "idle" ? 0 : 1,
-          transition: "opacity 500ms ease",
-          pointerEvents: "none",
-        }}
-      >
-        {saveStatus === "error" ? "Couldn't save — retrying…" : "Saved"}
-      </div>
-
-      <div
-        style={{
-          position: "fixed",
-          bottom: 20,
-          left: "50%",
-          transform: "translateX(-50%)",
-          fontSize: 13,
-          color: "#8a8a8a",
-          opacity: newDocFlash ? 1 : 0,
-          transition: "opacity 400ms ease",
-          pointerEvents: "none",
-        }}
-      >
-        New document started
+        {docs.length === 0 ? (
+          <p style={{ fontSize: 15, color: "#b3b3b3" }}>
+            Nothing here yet.{" "}
+            <Link href="/write" className="inline-link">
+              Start writing
+            </Link>
+            .
+          </p>
+        ) : (
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {docs.map((doc) => (
+              <li key={doc.id}>
+                <Link href={`/write?doc=${doc.id}`} className="doc-row">
+                  <span className="doc-name">{doc.name || "Untitled"}</span>
+                  <span className="doc-date">{formatModified(doc.modifiedTime)}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <style jsx global>{`
-        .title-row:hover .new-doc-button,
-        .title-row:focus-within .new-doc-button {
-          opacity: 1;
+        .new-link,
+        .inline-link {
+          font-size: 14px;
+          color: #8a8a8a;
+          text-decoration: none;
+          transition: color 150ms ease;
         }
-        .new-doc-button:hover {
-          background: #f3f3f3;
-          color: #444;
+        .new-link:hover,
+        .inline-link:hover {
+          color: #1a1a1a;
         }
-        textarea::placeholder,
-        input::placeholder {
-          color: #c9c9c9;
+        .inline-link {
+          text-decoration: underline;
+          text-underline-offset: 3px;
+        }
+        .doc-row {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 20px;
+          padding: 14px 12px;
+          margin: 0 -12px;
+          border-radius: 6px;
+          text-decoration: none;
+          color: inherit;
+          border-bottom: 1px solid #f0f0f0;
+          transition: background 150ms ease;
+        }
+        .doc-row:hover {
+          background: #fafafa;
+        }
+        .doc-name {
+          font-size: 17px;
+          color: #1a1a1a;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .doc-date {
+          font-size: 13px;
+          color: #b3b3b3;
+          flex-shrink: 0;
         }
       `}</style>
+    </div>
+  );
+}
+
+const buttonStyle: React.CSSProperties = {
+  fontSize: 14,
+  color: "#1a1a1a",
+  textDecoration: "none",
+  background: "transparent",
+  border: "1px solid #d8d8d8",
+  borderRadius: 6,
+  padding: "8px 16px",
+  cursor: "pointer",
+};
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 16,
+        background: "#fff",
+        padding: 24,
+      }}
+    >
+      {children}
     </div>
   );
 }

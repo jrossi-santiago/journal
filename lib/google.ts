@@ -129,16 +129,64 @@ export async function readDocText(
 export async function writeDocText(
   auth: InstanceType<typeof google.auth.OAuth2>,
   docId: string,
-  text: string
+  text: string,
+  name?: string
 ): Promise<void> {
   await drive(auth).files.update({
     fileId: docId,
+    // Keeping the Drive file name in step with the title is what makes the
+    // dashboard listing readable — it lists Drive file names, and Drive
+    // accepts the rename in the same request as the content upload.
+    requestBody: name ? { name } : undefined,
     media: {
       mimeType: "text/plain",
       body: text,
     },
     supportsAllDrives: true,
   });
+}
+
+export interface DocSummary {
+  id: string;
+  name: string;
+  modifiedTime: string | null;
+}
+
+/** Every Doc in the destination folder, most recently edited first. */
+export async function listDocs(
+  auth: InstanceType<typeof google.auth.OAuth2>,
+  folderId: string
+): Promise<DocSummary[]> {
+  const docs: DocSummary[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive(auth).files.list({
+      q:
+        `'${folderId}' in parents and mimeType = '${DOC_MIME_TYPE}' ` +
+        `and trashed = false`,
+      orderBy: "modifiedTime desc",
+      fields: "nextPageToken, files(id, name, modifiedTime)",
+      pageSize: 100,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageToken,
+    });
+
+    for (const file of res.data.files ?? []) {
+      if (!file.id) continue;
+      docs.push({
+        id: file.id,
+        name: file.name || "Untitled",
+        modifiedTime: file.modifiedTime ?? null,
+      });
+    }
+
+    pageToken = res.data.nextPageToken ?? undefined;
+    // Guard against pulling an unbounded folder into a single response.
+  } while (pageToken && docs.length < 500);
+
+  return docs;
 }
 
 /** Combines the title + body into the single plain-text blob stored in the Doc. */
