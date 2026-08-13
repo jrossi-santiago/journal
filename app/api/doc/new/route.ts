@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { composeContent, createDoc, getAuthenticatedClient, writeDocText } from "@/lib/google";
+import {
+  composeContent,
+  createDoc,
+  getAuthenticatedClient,
+  getDriveFolderId,
+  writeDocText,
+} from "@/lib/google";
 
 export async function POST(request: NextRequest) {
   try {
@@ -8,7 +14,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "not_authenticated" }, { status: 401 });
     }
 
-    const folderId = process.env.DRIVE_FOLDER_ID;
+    const folderId = getDriveFolderId();
     if (!folderId) {
       return NextResponse.json(
         { error: "DRIVE_FOLDER_ID is not configured" },

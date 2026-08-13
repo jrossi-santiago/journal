@@ -3,6 +3,7 @@ import {
   composeContent,
   createDoc,
   getAuthenticatedClient,
+  getDriveFolderId,
   parseContent,
   readDocText,
   writeDocText,
@@ -20,7 +21,7 @@ export async function GET() {
       return NextResponse.json({ authenticated: false });
     }
 
-    const folderId = process.env.DRIVE_FOLDER_ID;
+    const folderId = getDriveFolderId();
     if (!folderId) {
       return NextResponse.json(
         { error: "DRIVE_FOLDER_ID is not configured" },
