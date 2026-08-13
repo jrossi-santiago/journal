@@ -70,6 +70,7 @@ export async function createDoc(
       parents: [folderId],
     },
     fields: "id",
+    supportsAllDrives: true,
   });
   const id = res.data.id;
   if (!id) throw new Error("Drive did not return an id for the new doc");
@@ -98,6 +99,7 @@ export async function writeDocText(
       mimeType: "text/plain",
       body: text,
     },
+    supportsAllDrives: true,
   });
 }
 
