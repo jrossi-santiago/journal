@@ -8,48 +8,34 @@ import {
   readDocText,
   writeDocText,
 } from "@/lib/google";
-import { getMasterDocId, setMasterDocId } from "@/lib/kv";
 
-function todayTitle(): string {
+/** Drive file name for a doc whose title field is still empty. */
+function fallbackTitle(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export async function GET() {
+/** Reads one existing doc by id. */
+export async function GET(request: NextRequest) {
   try {
     const auth = await getAuthenticatedClient();
     if (!auth) {
       return NextResponse.json({ authenticated: false });
     }
 
-    const folderId = getDriveFolderId();
-    if (!folderId) {
-      return NextResponse.json(
-        { error: "DRIVE_FOLDER_ID is not configured" },
-        { status: 500 }
-      );
-    }
-
-    let docId = await getMasterDocId();
-    let title = "";
-    let body = "";
-
-    if (docId) {
-      try {
-        const text = await readDocText(auth, docId);
-        ({ title, body } = parseContent(text));
-      } catch (err) {
-        console.error(
-          "Failed to read master doc, it may have been deleted; creating a new one",
-          err
-        );
-        docId = null;
-      }
-    }
-
+    const docId = request.nextUrl.searchParams.get("id");
     if (!docId) {
-      docId = await createDoc(auth, folderId, todayTitle());
-      await setMasterDocId(docId);
+      // No id means "a new, empty document". Nothing is created in Drive
+      // until there's something to save.
+      return NextResponse.json({
+        authenticated: true,
+        docId: null,
+        title: "",
+        body: "",
+      });
     }
+
+    const text = await readDocText(auth, docId);
+    const { title, body } = parseContent(text);
 
     return NextResponse.json({ authenticated: true, docId, title, body });
   } catch (err) {
@@ -61,6 +47,11 @@ export async function GET() {
   }
 }
 
+/**
+ * Saves a doc. With a `docId` it amends that existing Drive file; without
+ * one it creates a brand new Drive file and returns its id, which the
+ * writer then reuses for every subsequent save of that document.
+ */
 export async function POST(request: NextRequest) {
   try {
     const auth = await getAuthenticatedClient();
@@ -69,17 +60,26 @@ export async function POST(request: NextRequest) {
     }
 
     const { docId, title, body } = await request.json();
-    if (!docId || typeof docId !== "string") {
-      return NextResponse.json({ error: "docId is required" }, { status: 400 });
+    const name = (title || "").trim() || fallbackTitle();
+    const content = composeContent(title ?? "", body ?? "");
+
+    if (docId && typeof docId === "string") {
+      await writeDocText(auth, docId, content, name);
+      return NextResponse.json({ docId, created: false });
     }
 
-    await writeDocText(
-      auth,
-      docId,
-      composeContent(title ?? "", body ?? "")
-    );
+    const folderId = getDriveFolderId();
+    if (!folderId) {
+      return NextResponse.json(
+        { error: "DRIVE_FOLDER_ID is not configured" },
+        { status: 500 }
+      );
+    }
 
-    return NextResponse.json({ ok: true });
+    const newDocId = await createDoc(auth, folderId, name);
+    await writeDocText(auth, newDocId, content);
+
+    return NextResponse.json({ docId: newDocId, created: true });
   } catch (err) {
     console.error("POST /api/doc failed", err);
     return NextResponse.json(
