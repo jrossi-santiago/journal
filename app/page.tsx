@@ -7,7 +7,7 @@ const AUTOSAVE_DEBOUNCE_MS = 2500;
 const LOCAL_MIRROR_DEBOUNCE_MS = 300;
 const RETRY_DELAY_MS = 5000;
 
-type Status = "loading" | "unauthenticated" | "ready";
+type Status = "loading" | "unauthenticated" | "ready" | "error";
 
 interface LocalBuffer {
   docId: string;
@@ -41,6 +41,7 @@ export default function Home() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const [newDocFlash, setNewDocFlash] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
 
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localMirrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,6 +62,16 @@ export default function Home() {
       try {
         const res = await fetch("/api/doc");
         const data = await res.json();
+
+        if (!res.ok) {
+          // A non-2xx response means we're authenticated with Google but
+          // something else failed server-side (e.g. DRIVE_FOLDER_ID is
+          // misconfigured or inaccessible) — this is not a login problem,
+          // so don't send the user back to the "Connect Google Drive" screen.
+          setDocError(data.error ?? "unknown_error");
+          setStatus("error");
+          return;
+        }
 
         if (!data.authenticated) {
           setStatus("unauthenticated");
@@ -174,6 +185,51 @@ export default function Home() {
 
   if (status === "loading") {
     return <div style={{ minHeight: "100vh", background: "#fff" }} />;
+  }
+
+  if (status === "error") {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 16,
+          background: "#fff",
+          padding: 24,
+        }}
+      >
+        <p style={{ fontSize: 15, color: "#1a1a1a", maxWidth: 420, textAlign: "center" }}>
+          Connected to Google, but couldn&apos;t load your document.
+        </p>
+        {docError && (
+          <p style={{ fontSize: 13, color: "#a33", maxWidth: 420, textAlign: "center" }}>
+            {docError}
+          </p>
+        )}
+        <p style={{ fontSize: 13, color: "#8a8a8a", maxWidth: 420, textAlign: "center" }}>
+          This usually means the configured Drive folder doesn&apos;t exist or isn&apos;t
+          accessible to the Google account you signed in with. Check{" "}
+          <code>DRIVE_FOLDER_ID</code> in your deployment&apos;s environment variables.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            fontSize: 14,
+            color: "#1a1a1a",
+            background: "transparent",
+            border: "1px solid #d8d8d8",
+            borderRadius: 6,
+            padding: "8px 16px",
+            cursor: "pointer",
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   if (status === "unauthenticated") {
