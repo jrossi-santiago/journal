@@ -22,7 +22,9 @@ doc.
        have a real Vercel domain — you can update it later)
    - This gives you a **Client ID** and **Client Secret**.
 5. Create the destination folder in Google Drive and copy the folder ID out
-   of the URL: `https://drive.google.com/drive/folders/<FOLDER_ID>`.
+   of the URL: `https://drive.google.com/drive/folders/<FOLDER_ID>`. Set
+   `DRIVE_FOLDER_ID` to just the `<FOLDER_ID>` part, not the whole URL
+   (a pasted URL is tolerated, but the bare ID is what Drive wants).
 
 ## 2. Set up storage
 
